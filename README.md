@@ -27,7 +27,12 @@ Comprehensive analysis of Brazilian E-Commerce data demonstrating end-to-end dat
 
 ## 🚀 Getting Started
 
-[Installation and setup instructions]
+## Phase 1: Data Cleaning
+
+- **Python Version:** `notebooks/02_data_cleaning_python.ipynb`
+- **R Version:** `notebooks/03_data_cleaning_R.Rmd`
+
+Both implementations demonstrate the same rigorous data cleaning approach using different programming languages and their respective ecosystems.
 
 ## 📈 Key Findings
 
