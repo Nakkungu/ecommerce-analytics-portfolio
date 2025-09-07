@@ -1,0 +1,9 @@
+{
+  "total_orders": 99441,
+  "analysis_period_days": 773,
+  "peak_threshold": 297.35,
+  "peak_days_count": 32,
+  "top_month": "August",
+  "top_season": "Winter",
+  "peak_hour": "16"
+}
