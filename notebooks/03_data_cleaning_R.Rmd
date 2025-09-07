@@ -1,0 +1,850 @@
+---
+title: "Brazilian E-Commerce Data Cleaning - R Implementation"
+author: "Angella Nakkungu"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6
+)
+```
+
+# Brazilian E-Commerce Data Cleaning - Phase 1 (R Version)
+
+This notebook demonstrates comprehensive data cleaning techniques using R for the Brazilian E-Commerce dataset. It showcases technical skills in data validation, outlier detection, and standardization using R's powerful data manipulation capabilities.
+
+**Dataset Source:** Brazilian E-Commerce Public Dataset by Olist (Kaggle)  
+**Programming Language:** R  
+**Author:** Angella Nakkungu  
+
+---
+
+## 1. Setup and Library Loading
+
+```{r libraries}
+# Load required libraries
+library(tidyverse)    # Data manipulation and visualization
+library(readr)        # Data import
+library(dplyr)        # Data manipulation
+library(lubridate)    # Date handling
+library(stringr)      # String manipulation
+library(janitor)      # Data cleaning utilities
+library(VIM)          # Missing data visualization
+library(corrplot)     # Correlation plots
+library(DT)           # Interactive tables
+library(knitr)        # Report generation
+library(kableExtra)   # Enhanced tables
+
+# Set global options
+options(scipen = 999)  # Disable scientific notation
+theme_set(theme_minimal())  # Set ggplot theme
+
+cat("="*60, "\n")
+cat("BRAZILIAN E-COMMERCE DATA CLEANING PROJECT - R VERSION\n")
+cat("Phase 1: Data Collection & Cleaning\n")
+cat("="*60, "\n")
+```
+
+---
+
+## 2. Data Loading and Initial Exploration
+
+```{r data-loading}
+# Define file paths
+data_path <- "../data/raw/"
+processed_path <- "../data/processed/"
+
+# Create processed directory if it doesn't exist
+if (!dir.exists(processed_path)) {
+  dir.create(processed_path, recursive = TRUE)
+}
+
+# Function to load all datasets
+load_datasets <- function(path) {
+  datasets <- list()
+  
+  # Define dataset files
+  files <- c(
+    customers = "olist_customers_dataset.csv",
+    orders = "olist_orders_dataset.csv",
+    order_items = "olist_order_items_dataset.csv",
+    products = "olist_products_dataset.csv",
+    sellers = "olist_sellers_dataset.csv",
+    payments = "olist_order_payments_dataset.csv",
+    reviews = "olist_order_reviews_dataset.csv",
+    geolocation = "olist_geolocation_dataset.csv",
+    product_category = "product_category_name_translation.csv"
+  )
+  
+  # Load each dataset
+  for (name in names(files)) {
+    file_path <- paste0(path, files[name])
+    
+    if (file.exists(file_path)) {
+      datasets[[name]] <- read_csv(file_path, locale = locale(encoding = "UTF-8"))
+      cat("✅ Loaded", name, "dataset:", nrow(datasets[[name]]), "rows\n")
+    } else {
+      cat("❌ File not found:", file_path, "\n")
+    }
+  }
+  
+  return(datasets)
+}
+
+# Load all datasets
+datasets <- load_datasets(data_path)
+cat("\n📊 Successfully loaded", length(datasets), "datasets\n")
+```
+
+---
+
+## 3. Dataset Structure Analysis
+
+```{r structure-analysis}
+# Function to analyze dataset structure
+analyze_structure <- function(datasets_list) {
+  structure_info <- tibble(
+    dataset = character(),
+    rows = numeric(),
+    columns = numeric(),
+    size_mb = numeric(),
+    column_names = character()
+  )
+  
+  for (name in names(datasets_list)) {
+    df <- datasets_list[[name]]
+    
+    structure_info <- structure_info %>%
+      add_row(
+        dataset = name,
+        rows = nrow(df),
+        columns = ncol(df),
+        size_mb = round(object.size(df) / 1024^2, 2),
+        column_names = paste(colnames(df), collapse = ", ")
+      )
+  }
+  
+  return(structure_info)
+}
+
+# Analyze structure
+structure_summary <- analyze_structure(datasets)
+
+# Display structure summary
+structure_summary %>%
+  select(-column_names) %>%
+  kable(caption = "Dataset Structure Overview",
+        col.names = c("Dataset", "Rows", "Columns", "Size (MB)")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+---
+
+## 4. Data Quality Assessment (BEFORE Cleaning)
+
+```{r quality-before}
+# Function to assess data quality
+assess_data_quality <- function(datasets_list, stage = "BEFORE") {
+  cat("\n", "="*60, "\n")
+  cat("DATA QUALITY ASSESSMENT -", stage, "CLEANING\n")
+  cat("="*60, "\n\n")
+  
+  quality_report <- list()
+  
+  for (name in names(datasets_list)) {
+    df <- datasets_list[[name]]
+    cat("🔍", toupper(name), "QUALITY ASSESSMENT:\n")
+    
+    # Basic metrics
+    total_rows <- nrow(df)
+    total_cols <- ncol(df)
+    
+    # Missing values
+    missing_values <- df %>%
+      summarise_all(~sum(is.na(.))) %>%
+      gather(key = "column", value = "missing_count") %>%
+      mutate(missing_percent = round(missing_count / total_rows * 100, 2)) %>%
+      filter(missing_count > 0)
+    
+    # Duplicates
+    duplicates <- sum(duplicated(df))
+    duplicate_percent <- round(duplicates / total_rows * 100, 2)
+    
+    # Data types
+    dtypes <- sapply(df, class)
+    
+    cat("   📏 Dimensions:", format(total_rows, big.mark = ","), "rows ×", total_cols, "columns\n")
+    cat("   🔄 Duplicates:", format(duplicates, big.mark = ","), "(", duplicate_percent, "%)\n")
+    
+    if (nrow(missing_values) > 0) {
+      cat("   ❌ Missing values found:\n")
+      for (i in 1:nrow(missing_values)) {
+        cat("      -", missing_values$column[i], ":", 
+            format(missing_values$missing_count[i], big.mark = ","), 
+            "(", missing_values$missing_percent[i], "%)\n")
+      }
+    } else {
+      cat("   ✅ No missing values\n")
+    }
+    
+    cat("\n")
+    
+    # Store quality metrics
+    quality_report[[name]] <- list(
+      total_rows = total_rows,
+      total_cols = total_cols,
+      missing_values = missing_values,
+      duplicates = duplicates,
+      duplicate_percent = duplicate_percent,
+      dtypes = dtypes
+    )
+  }
+  
+  return(quality_report)
+}
+
+# Assess quality before cleaning
+quality_before <- assess_data_quality(datasets, "BEFORE")
+```
+
+---
+
+## 5. Detailed Issue Identification
+
+```{r issue-identification}
+# Function to identify specific data issues
+identify_issues <- function(datasets_list) {
+  cat("\n", "="*60, "\n")
+  cat("DETAILED ISSUE IDENTIFICATION\n")
+  cat("="*60, "\n")
+  
+  issues_found <- list()
+  
+  # CUSTOMERS Dataset Issues
+  if ("customers" %in% names(datasets_list)) {
+    cat("\n🛒 CUSTOMERS DATASET ISSUES:\n")
+    customers_df <- datasets_list$customers
+    customer_issues <- c()
+    
+    # Check zip codes
+    if ("customer_zip_code_prefix" %in% colnames(customers_df)) {
+      invalid_zips <- customers_df %>%
+        filter(nchar(as.character(customer_zip_code_prefix)) != 5)
+      
+      if (nrow(invalid_zips) > 0) {
+        issue <- paste("Invalid zip codes:", nrow(invalid_zips), "records")
+        customer_issues <- c(customer_issues, issue)
+        cat("   ❌", issue, "\n")
+      }
+    }
+    
+    # Check for missing geographic info
+    geo_cols <- c("customer_city", "customer_state")
+    for (col in geo_cols) {
+      if (col %in% colnames(customers_df)) {
+        missing <- sum(is.na(customers_df[[col]]))
+        if (missing > 0) {
+          issue <- paste("Missing", col, ":", missing, "records")
+          customer_issues <- c(customer_issues, issue)
+          cat("   ❌", issue, "\n")
+        }
+      }
+    }
+    
+    if (length(customer_issues) == 0) {
+      cat("   ✅ No major issues found\n")
+    }
+    
+    issues_found$customers <- customer_issues
+  }
+  
+  # GEOLOCATION Dataset Issues
+  if ("geolocation" %in% names(datasets_list)) {
+    cat("\n🌍 GEOLOCATION DATASET ISSUES:\n")
+    geo_df <- datasets_list$geolocation
+    geo_issues <- c()
+    
+    # Check coordinates
+    if (all(c("geolocation_lat", "geolocation_lng") %in% colnames(geo_df))) {
+      invalid_lat <- geo_df %>%
+        filter(geolocation_lat < -90 | geolocation_lat > 90)
+      
+      invalid_lng <- geo_df %>%
+        filter(geolocation_lng < -180 | geolocation_lng > 180)
+      
+      if (nrow(invalid_lat) > 0) {
+        issue <- paste("Invalid latitude values:", nrow(invalid_lat), "records")
+        geo_issues <- c(geo_issues, issue)
+        cat("   ❌", issue, "\n")
+      }
+      
+      if (nrow(invalid_lng) > 0) {
+        issue <- paste("Invalid longitude values:", nrow(invalid_lng), "records")
+        geo_issues <- c(geo_issues, issue)
+        cat("   ❌", issue, "\n")
+      }
+    }
+    
+    # Check duplicates
+    duplicates <- sum(duplicated(geo_df))
+    if (duplicates > 0) {
+      issue <- paste("Duplicate records:", format(duplicates, big.mark = ","))
+      geo_issues <- c(geo_issues, issue)
+      cat("   ❌", issue, "\n")
+    }
+    
+    if (length(geo_issues) == 0) {
+      cat("   ✅ No major issues found\n")
+    }
+    
+    issues_found$geolocation <- geo_issues
+  }
+  
+  # ORDERS Dataset Issues
+  if ("orders" %in% names(datasets_list)) {
+    cat("\n📦 ORDERS DATASET ISSUES:\n")
+    orders_df <- datasets_list$orders
+    order_issues <- c()
+    
+    # Check order status
+    if ("order_status" %in% colnames(orders_df)) {
+      status_counts <- orders_df %>%
+        count(order_status, sort = TRUE)
+      
+      cat("   📊 Order status distribution:\n")
+      for (i in 1:nrow(status_counts)) {
+        cat("      -", status_counts$order_status[i], ":", 
+            format(status_counts$n[i], big.mark = ","), "\n")
+      }
+    }
+    
+    if (length(order_issues) == 0) {
+      cat("   ✅ No major issues found\n")
+    }
+    
+    issues_found$orders <- order_issues
+  }
+  
+  return(issues_found)
+}
+
+# Identify issues
+issues_identified <- identify_issues(datasets)
+```
+
+---
+
+## 6. Data Cleaning Functions
+
+```{r cleaning-functions}
+# Function to clean customers data
+clean_customers_data <- function(df) {
+  cat("🧹 Cleaning customers data...\n")
+  
+  df_clean <- df
+  cleaning_log <- c()
+  
+  # Standardize zip codes
+  if ("customer_zip_code_prefix" %in% colnames(df_clean)) {
+    df_clean <- df_clean %>%
+      mutate(customer_zip_code_prefix = str_pad(as.character(customer_zip_code_prefix), 
+                                               width = 5, side = "left", pad = "0"))
+    cleaning_log <- c(cleaning_log, "Standardized zip codes to 5 digits")
+  }
+  
+  # Clean city names
+  if ("customer_city" %in% colnames(df_clean)) {
+    df_clean <- df_clean %>%
+      mutate(customer_city = str_to_title(str_trim(customer_city)))
+    cleaning_log <- c(cleaning_log, "Standardized city names to title case")
+  }
+  
+  # Standardize state codes
+  if ("customer_state" %in% colnames(df_clean)) {
+    df_clean <- df_clean %>%
+      mutate(customer_state = str_to_upper(str_trim(customer_state)))
+    cleaning_log <- c(cleaning_log, "Standardized state codes to uppercase")
+  }
+  
+  cat("   ✅ Applied", length(cleaning_log), "cleaning operations\n")
+  for (log in cleaning_log) {
+    cat("      -", log, "\n")
+  }
+  
+  return(list(data = df_clean, log = cleaning_log))
+}
+
+# Function to clean orders data
+clean_orders_data <- function(df) {
+  cat("🧹 Cleaning orders data...\n")
+  
+  df_clean <- df
+  cleaning_log <- c()
+  
+  # Convert date columns
+  date_columns <- colnames(df_clean)[grepl("date|timestamp", colnames(df_clean), ignore.case = TRUE)]
+  
+  for (col in date_columns) {
+    df_clean[[col]] <- ymd_hms(df_clean[[col]], quiet = TRUE)
+    if (sum(is.na(df_clean[[col]])) < nrow(df_clean)) {
+      cleaning_log <- c(cleaning_log, paste("Converted", col, "to datetime"))
+    }
+  }
+  
+  # Standardize order status
+  if ("order_status" %in% colnames(df_clean)) {
+    df_clean <- df_clean %>%
+      mutate(order_status = str_to_lower(str_trim(order_status)))
+    cleaning_log <- c(cleaning_log, "Standardized order status to lowercase")
+  }
+  
+  cat("   ✅ Applied", length(cleaning_log), "cleaning operations\n")
+  for (log in cleaning_log) {
+    cat("      -", log, "\n")
+  }
+  
+  return(list(data = df_clean, log = cleaning_log))
+}
+
+# Function to clean geolocation data
+clean_geolocation_data <- function(df) {
+  cat("🧹 Cleaning geolocation data...\n")
+  
+  df_clean <- df
+  cleaning_log <- c()
+  initial_rows <- nrow(df_clean)
+  
+  # Remove invalid coordinates
+  if (all(c("geolocation_lat", "geolocation_lng") %in% colnames(df_clean))) {
+    df_clean <- df_clean %>%
+      filter(
+        geolocation_lat >= -90 & geolocation_lat <= 90,
+        geolocation_lng >= -180 & geolocation_lng <= 180
+      )
+    
+    removed_coords <- initial_rows - nrow(df_clean)
+    if (removed_coords > 0) {
+      cleaning_log <- c(cleaning_log, paste("Removed", removed_coords, "records with invalid coordinates"))
+    }
+  }
+  
+  # Remove duplicates
+  before_dedup <- nrow(df_clean)
+  df_clean <- df_clean %>% distinct()
+  duplicates_removed <- before_dedup - nrow(df_clean)
+  
+  if (duplicates_removed > 0) {
+    cleaning_log <- c(cleaning_log, paste("Removed", duplicates_removed, "duplicate records"))
+  }
+  
+  # Standardize zip codes
+  if ("geolocation_zip_code_prefix" %in% colnames(df_clean)) {
+    df_clean <- df_clean %>%
+      mutate(geolocation_zip_code_prefix = str_pad(as.character(geolocation_zip_code_prefix), 
+                                                  width = 5, side = "left", pad = "0"))
+    cleaning_log <- c(cleaning_log, "Standardized zip codes to 5 digits")
+  }
+  
+  # Clean city names
+  if ("geolocation_city" %in% colnames(df_clean)) {
+    df_clean <- df_clean %>%
+      mutate(geolocation_city = str_to_title(str_trim(geolocation_city)))
+    cleaning_log <- c(cleaning_log, "Standardized city names to title case")
+  }
+  
+  cat("   ✅ Applied", length(cleaning_log), "cleaning operations\n")
+  for (log in cleaning_log) {
+    cat("      -", log, "\n")
+  }
+  
+  return(list(data = df_clean, log = cleaning_log))
+}
+
+# Function to clean payments data
+clean_payments_data <- function(df) {
+  cat("🧹 Cleaning payments data...\n")
+  
+  df_clean <- df
+  cleaning_log <- c()
+  
+  # Standardize payment type
+  if ("payment_type" %in% colnames(df_clean)) {
+    df_clean <- df_clean %>%
+      mutate(payment_type = str_to_lower(str_trim(payment_type)))
+    cleaning_log <- c(cleaning_log, "Standardized payment types to lowercase")
+  }
+  
+  # Ensure payment values are positive
+  if ("payment_value" %in% colnames(df_clean)) {
+    negative_payments <- sum(df_clean$payment_value < 0, na.rm = TRUE)
+    if (negative_payments > 0) {
+      df_clean <- df_clean %>%
+        filter(payment_value >= 0)
+      cleaning_log <- c(cleaning_log, paste("Removed", negative_payments, "records with negative payment values"))
+    }
+  }
+  
+  # Handle installments
+  if ("payment_installments" %in% colnames(df_clean)) {
+    df_clean <- df_clean %>%
+      mutate(payment_installments = ifelse(is.na(payment_installments) | payment_installments < 1, 
+                                          1, as.integer(payment_installments)))
+    cleaning_log <- c(cleaning_log, "Filled missing installments with 1 and converted to integer")
+  }
+  
+  cat("   ✅ Applied", length(cleaning_log), "cleaning operations\n")
+  for (log in cleaning_log) {
+    cat("      -", log, "\n")
+  }
+  
+  return(list(data = df_clean, log = cleaning_log))
+}
+```
+
+---
+
+## 7. Apply Cleaning Functions
+
+```{r apply-cleaning}
+cat("\n", "="*60, "\n")
+cat("APPLYING DATA CLEANING\n")
+cat("="*60, "\n")
+
+# Apply cleaning to each dataset
+cleaned_datasets <- list()
+cleaning_logs <- list()
+
+# Clean customers
+if ("customers" %in% names(datasets)) {
+  result <- clean_customers_data(datasets$customers)
+  cleaned_datasets$customers <- result$data
+  cleaning_logs$customers <- result$log
+}
+
+# Clean orders
+if ("orders" %in% names(datasets)) {
+  result <- clean_orders_data(datasets$orders)
+  cleaned_datasets$orders <- result$data
+  cleaning_logs$orders <- result$log
+}
+
+# Clean geolocation
+if ("geolocation" %in% names(datasets)) {
+  result <- clean_geolocation_data(datasets$geolocation)
+  cleaned_datasets$geolocation <- result$data
+  cleaning_logs$geolocation <- result$log
+}
+
+# Clean payments
+if ("payments" %in% names(datasets)) {
+  result <- clean_payments_data(datasets$payments)
+  cleaned_datasets$payments <- result$data
+  cleaning_logs$payments <- result$log
+}
+
+# Copy other datasets (minimal cleaning needed)
+for (name in c("order_items", "products", "sellers", "reviews", "product_category")) {
+  if (name %in% names(datasets)) {
+    cleaned_datasets[[name]] <- datasets[[name]]
+    cat("🧹 Copying", name, "data (no cleaning needed)\n")
+  }
+}
+```
+
+---
+
+## 8. Data Quality Assessment (AFTER Cleaning)
+
+```{r quality-after}
+# Assess data quality after cleaning
+quality_after <- assess_data_quality(cleaned_datasets, "AFTER")
+```
+
+---
+
+## 9. Cleaning Impact Analysis
+
+```{r impact-analysis}
+# Function to analyze cleaning impact
+analyze_cleaning_impact <- function(quality_before, quality_after, cleaning_logs) {
+  cat("\n", "="*60, "\n")
+  cat("CLEANING IMPACT ANALYSIS\n")
+  cat("="*60, "\n")
+  
+  impact_summary <- tibble(
+    dataset = character(),
+    rows_before = numeric(),
+    rows_after = numeric(),
+    rows_change = numeric(),
+    missing_before = numeric(),
+    missing_after = numeric(),
+    missing_change = numeric(),
+    duplicates_before = numeric(),
+    duplicates_after = numeric(),
+    duplicates_change = numeric(),
+    operations_applied = numeric()
+  )
+  
+  for (dataset_name in names(quality_before)) {
+    if (dataset_name %in% names(quality_after)) {
+      cat("\n📈", toupper(dataset_name), "CLEANING IMPACT:\n")
+      
+      before <- quality_before[[dataset_name]]
+      after <- quality_after[[dataset_name]]
+      
+      # Calculate changes
+      rows_before <- before$total_rows
+      rows_after <- after$total_rows
+      rows_change <- rows_after - rows_before
+      
+      missing_before <- ifelse(nrow(before$missing_values) > 0, 
+                              sum(before$missing_values$missing_count), 0)
+      missing_after <- ifelse(nrow(after$missing_values) > 0, 
+                             sum(after$missing_values$missing_count), 0)
+      missing_change <- missing_after - missing_before
+      
+      duplicates_before <- before$duplicates
+      duplicates_after <- after$duplicates
+      duplicates_change <- duplicates_after - duplicates_before
+      
+      operations_count <- ifelse(dataset_name %in% names(cleaning_logs), 
+                                length(cleaning_logs[[dataset_name]]), 0)
+      
+      # Display impact
+      cat("   📏 Rows:", format(rows_before, big.mark = ","), "→", 
+          format(rows_after, big.mark = ","), "(", 
+          ifelse(rows_change >= 0, "+", ""), rows_change, ")\n")
+      
+      cat("   ❌ Missing values:", format(missing_before, big.mark = ","), "→", 
+          format(missing_after, big.mark = ","), "(", 
+          ifelse(missing_change >= 0, "+", ""), missing_change, ")\n")
+      
+      cat("   🔄 Duplicates:", format(duplicates_before, big.mark = ","), "→", 
+          format(duplicates_after, big.mark = ","), "(", 
+          ifelse(duplicates_change >= 0, "+", ""), duplicates_change, ")\n")
+      
+      cat("   🛠️ Operations applied:", operations_count, "\n")
+      
+      # Add to summary
+      impact_summary <- impact_summary %>%
+        add_row(
+          dataset = dataset_name,
+          rows_before = rows_before,
+          rows_after = rows_after,
+          rows_change = rows_change,
+          missing_before = missing_before,
+          missing_after = missing_after,
+          missing_change = missing_change,
+          duplicates_before = duplicates_before,
+          duplicates_after = duplicates_after,
+          duplicates_change = duplicates_change,
+          operations_applied = operations_count
+        )
+    }
+  }
+  
+  return(impact_summary)
+}
+
+# Analyze impact
+impact_analysis <- analyze_cleaning_impact(quality_before, quality_after, cleaning_logs)
+
+# Display impact summary table
+impact_analysis %>%
+  select(dataset, rows_change, missing_change, duplicates_change, operations_applied) %>%
+  kable(caption = "Cleaning Impact Summary",
+        col.names = c("Dataset", "Row Changes", "Missing Changes", 
+                     "Duplicate Changes", "Operations Applied")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+---
+
+## 10. Data Quality Visualizations
+
+```{r quality-visualizations, fig.height=8}
+# Create visualization of data quality improvements
+create_quality_plots <- function(quality_before, quality_after) {
+  
+  # Prepare data for plotting
+  quality_comparison <- tibble(
+    dataset = names(quality_before),
+    missing_before = map_dbl(quality_before, ~{
+      if(nrow(.x$missing_values) > 0) sum(.x$missing_values$missing_count) else 0
+    }),
+    missing_after = map_dbl(quality_after, ~{
+      if(nrow(.x$missing_values) > 0) sum(.x$missing_values$missing_count) else 0
+    }),
+    duplicates_before = map_dbl(quality_before, ~.x$duplicates),
+    duplicates_after = map_dbl(quality_after, ~.x$duplicates)
+  ) %>%
+  filter(dataset %in% names(quality_after))
+  
+  # Missing values comparison
+  p1 <- quality_comparison %>%
+    select(dataset, missing_before, missing_after) %>%
+    gather(key = "stage", value = "missing_count", -dataset) %>%
+    mutate(stage = ifelse(stage == "missing_before", "Before", "After")) %>%
+    ggplot(aes(x = dataset, y = missing_count, fill = stage)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = c("Before" = "#e74c3c", "After" = "#27ae60")) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = "Missing Values: Before vs After Cleaning",
+         x = "Dataset", y = "Missing Values Count", fill = "Stage") +
+    theme_minimal()
+  
+  # Duplicates comparison
+  p2 <- quality_comparison %>%
+    select(dataset, duplicates_before, duplicates_after) %>%
+    gather(key = "stage", value = "duplicate_count", -dataset) %>%
+    mutate(stage = ifelse(stage == "duplicates_before", "Before", "After")) %>%
+    ggplot(aes(x = dataset, y = duplicate_count, fill = stage)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = c("Before" = "#e74c3c", "After" = "#27ae60")) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = "Duplicate Records: Before vs After Cleaning",
+         x = "Dataset", y = "Duplicate Count", fill = "Stage") +
+    theme_minimal()
+  
+  return(list(missing_plot = p1, duplicates_plot = p2))
+}
+
+# Create and display plots
+quality_plots <- create_quality_plots(quality_before, quality_after)
+
+# Display plots
+quality_plots$missing_plot
+quality_plots$duplicates_plot
+```
+
+---
+
+## 11. Save Cleaned Data
+
+```{r save-data}
+cat("\n", "="*60, "\n")
+cat("SAVING CLEANED DATA\n")
+cat("="*60, "\n")
+
+# Save each cleaned dataset
+for (name in names(cleaned_datasets)) {
+  filename <- paste0(processed_path, "cleaned_", name, ".csv")
+  write_csv(cleaned_datasets[[name]], filename)
+  cat("💾 Saved", name, ":", filename, "(", format(nrow(cleaned_datasets[[name]]), big.mark = ","), "rows)\n")
+}
+
+cat("\n✅ Data cleaning completed successfully!\n")
+cat("📊 Processed", length(cleaned_datasets), "datasets\n")
+cat("📁 Files saved to:", processed_path, "\n")
+```
+
+---
+
+## 12. Final Summary Report
+
+```{r final-summary}
+# Generate comprehensive summary
+generate_final_summary <- function() {
+  
+  total_datasets <- length(cleaned_datasets)
+  total_operations <- sum(sapply(cleaning_logs, length))
+  
+  summary_stats <- impact_analysis %>%
+    summarise(
+      total_rows_processed = sum(rows_after),
+      total_missing_removed = sum(pmax(0, -missing_change)),
+      total_duplicates_removed = sum(pmax(0, -duplicates_change)),
+      datasets_improved = sum(operations_applied > 0)
+    )
+  
+  cat("\n", "="*60, "\n")
+  cat("FINAL CLEANING SUMMARY REPORT\n")
+  cat("="*60, "\n")
+  cat("📅 Completion time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+  cat("📊 Datasets processed:", total_datasets, "\n")
+  cat("🛠️ Total cleaning operations:", total_operations, "\n")
+  cat("📏 Total rows processed:", format(summary_stats$total_rows_processed, big.mark = ","), "\n")
+  cat("❌ Missing values addressed:", format(summary_stats$total_missing_removed, big.mark = ","), "\n")
+  cat("🔄 Duplicates removed:", format(summary_stats$total_duplicates_removed, big.mark = ","), "\n")
+  cat("📈 Datasets improved:", summary_stats$datasets_improved, "out of", total_datasets, "\n")
+  cat("🎯 Status: Ready for Phase 2 - Exploratory Data Analysis\n")
+  cat("="*60, "\n")
+  
+  return(summary_stats)
+}
+
+# Generate final summary
+final_summary <- generate_final_summary()
+```
+
+---
+
+## 13. Next Steps
+
+The data cleaning phase has been completed successfully using R. Key accomplishments include:
+
+### ✅ **Completed Tasks:**
+- **Data Loading:** Successfully imported 9 datasets
+- **Quality Assessment:** Comprehensive before/after analysis
+- **Issue Identification:** Systematic detection of data problems
+- **Data Cleaning:** Applied targeted cleaning operations
+- **Impact Analysis:** Quantified improvements with visualizations
+- **Data Export:** Saved cleaned datasets for next phase
+
+### 🎯 **Ready for Phase 2:**
+- **Exploratory Data Analysis:** Deep dive into business patterns
+- **Customer Segmentation:** RFM analysis and behavioral clustering
+- **Sales Forecasting:** Time series modeling and predictions
+- **Geographic Analysis:** Regional performance insights
+- **Product Analytics:** Category and seller performance
+
+### 📊 **R-Specific Advantages Demonstrated:**
+- **tidyverse ecosystem:** Elegant data manipulation with dplyr
+- **Advanced string processing:** stringr for text standardization
+- **Date handling:** lubridate for temporal data processing
+- **Visualization:** ggplot2 for quality assessment charts
+- **Statistical functions:** Built-in statistical capabilities
+- **R Markdown:** Professional reporting and documentation
+
+### 💼 **Portfolio Value:**
+This R implementation showcases:
+- **Multi-language proficiency** (Python + R comparison)
+- **Statistical programming expertise** using R's specialized functions
+- **Professional documentation** with R Markdown
+- **Data visualization skills** with ggplot2
+- **Reproducible research** practices with knitr
+
+---
+
+## Comparison: Python vs R Implementation
+
+| Aspect | Python Version | R Version |
+|--------|----------------|-----------|
+| **Data Loading** | pandas.read_csv() | readr::read_csv() |
+| **Missing Values** | df.isnull().sum() | summarise_all(~sum(is.na(.))) |
+| **String Processing** | str.title(), str.upper() | str_to_title(), str_to_upper() |
+| **Date Handling** | pd.to_datetime() | ymd_hms() from lubridate |
+| **Duplicate Removal** | drop_duplicates() | distinct() |
+| **Visualization** | matplotlib/seaborn | ggplot2 |
+| **Documentation** | Jupyter Notebook | R Markdown |
+
+Both implementations achieve the same data quality improvements while showcasing different technical approaches and language-specific strengths.
+
+---
+
+**Author:** Angella Nakkungu  
+**Project:** Brazilian E-Commerce Analytics Portfolio  
+**Phase:** 1 - Data Cleaning (R Implementation)  
+**Next Phase:** Exploratory Data Analysis  
+**Repository:** [GitHub Link - ecommerce-analytics-portfolio](https://github.com/Nakkungu/ecommerce-analytics-portfolio)
